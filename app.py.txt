@@ -1,28 +1,51 @@
+# Step 1: Install Required Packages
+!pip install xgboost gradio pandas scikit-learn
+
+# Step 2: Imports
 import pandas as pd
 import numpy as np
+from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
 import xgboost as xgb
-import joblib
 import gradio as gr
 
-# Load model and scaler
-model = joblib.load("xgb_model.pkl")
-scaler = joblib.load("scaler.pkl")
+# Step 3: Load & Prepare Data
+url = "https://archive.ics.uci.edu/ml/machine-learning-databases/00383/risk_factors_cervical_cancer.csv"
+df = pd.read_csv(url)
+df.replace('?', np.nan, inplace=True)
+df = df.astype(float)
+df.fillna(df.mean(), inplace=True)
 
-# Load feature names
-feature_names = [
-    "Age", "Number of sexual partners", "First sexual intercourse",
-    "Num of pregnancies", "Smokes", "Smokes (years)", "Smokes (packs/year)",
-    "Hormonal Contraceptives", "Hormonal Contraceptives (years)",
-    "IUD", "IUD (years)", "STDs", "STDs (number)", "STDs:condylomatosis",
-    "STDs:cervical condylomatosis", "STDs:vaginal condylomatosis",
-    "STDs:vulvo-perineal condylomatosis", "STDs:syphilis",
-    "STDs:pelvic inflammatory disease", "STDs:genital herpes",
-    "STDs:molluscum contagiosum", "STDs:AIDS", "STDs:HIV",
-    "STDs:Hepatitis B", "STDs:HPV", "STDs: Time since first diagnosis",
-    "STDs: Time since last diagnosis", "Dx:Cancer", "Dx:CIN", "Dx:HPV",
-    "Dx", "Hinselmann", "Schiller", "Citology"
-]
+X = df.drop(columns=['Biopsy'])
+y = df['Biopsy']
+
+scaler = StandardScaler()
+X_scaled = scaler.fit_transform(X)
+
+X_train, X_test, y_train, y_test = train_test_split(
+    X_scaled, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# Handle class imbalance
+neg, pos = np.bincount(y_train.astype(int))
+scale_pos_weight = neg / pos
+
+# Train XGBoost
+model = xgb.XGBClassifier(
+    use_label_encoder=False,
+    eval_metric='logloss',
+    scale_pos_weight=scale_pos_weight,
+    max_depth=4,
+    learning_rate=0.1,
+    n_estimators=100,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42
+)
+model.fit(X_train, y_train)
+
+# Step 4: Define Prediction Function
+feature_names = df.drop(columns=["Biopsy"]).columns.tolist()
 
 def predict_risk(*inputs):
     input_array = np.array(inputs).reshape(1, -1)
@@ -33,43 +56,129 @@ def predict_risk(*inputs):
     if prob >= 0.5:
         risk_level = "⚠️ High Risk"
         message = (
-            "🚨 *High Risk Detected*\n\n"
-            "📌 Recommended Precautions:\n"
-            "- Schedule a colposcopy or biopsy\n"
-            "- Get a full HPV test and Pap smear\n"
-            "- Follow up every 6 months\n"
-            "- Avoid smoking\n"
-            "- Strengthen immunity with diet, sleep & exercise"
+            "<b>🚨 High Risk Detected</b><br><br>"
+            "<ul>"
+            "<li>Schedule a colposcopy or biopsy</li>"
+            "<li>Get a full HPV test and Pap smear</li>"
+            "<li>Follow up every 6 months</li>"
+            "<li>Avoid smoking</li>"
+            "<li>Boost immunity with sleep, diet, and exercise</li>"
+            "</ul>"
         )
     elif prob >= 0.2:
         risk_level = "⚠️ Moderate Risk"
         message = (
-            "⚠️ *Moderate Risk Noted*\n\n"
-            "📌 Suggested Actions:\n"
-            "- Book a Pap smear or HPV screening\n"
-            "- Limit smoking and alcohol\n"
-            "- Consult about hormonal contraceptives\n"
-            "- Yearly checkups recommended"
+            "<b>⚠️ Moderate Risk Noted</b><br><br>"
+            "<ul>"
+            "<li>Book a Pap smear or HPV screening</li>"
+            "<li>Reduce smoking and alcohol</li>"
+            "<li>Consult about hormonal contraceptives</li>"
+            "<li>Annual health checks recommended</li>"
+            "</ul>"
         )
     else:
         risk_level = "✅ Low Risk"
         message = (
-            "✅ *Low Risk*\n\n"
-            "📌 Keep it up!\n"
-            "- Regular screenings every 3 years\n"
-            "- Practice safe sex\n"
-            "- Maintain a healthy lifestyle"
+            "<b>✅ Low Risk</b><br><br>"
+            "<ul>"
+            "<li>Regular screening every 3 years</li>"
+            "<li>Safe sexual practices</li>"
+            "<li>Healthy habits & lifestyle</li>"
+            "</ul>"
         )
 
-    return f"{risk_level}\nEstimated Risk: {risk_percent}%\n\n{message}"
+    return f"<h3>{risk_level}</h3><p><b>Estimated Risk:</b> {risk_percent}%</p>{message}"
 
-inputs = [gr.Number(label=label) for label in feature_names]
+# Step 5: Custom CSS for Dark Theme
+custom_css = """
+.gradio-container {
+    font-family: 'Segoe UI', sans-serif;
+    background-color: #121212;
+    color: #f0f4f8;
+}
+h1, h2, h3 {
+    color: #bb86fc;
+}
+.tabitem {
+    background-color: #1e1e1e;
+    border-radius: 12px;
+    padding: 20px;
+    margin-bottom: 20px;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.5);
+    color: #f0f4f8;
+}
+button {
+    background-color: #333333;
+    color: #f0f4f8;
+    border: 1px solid #bb86fc;
+    padding: 10px 20px;
+    border-radius: 8px;
+    font-size: 1em;
+}
+button:hover {
+    background-color: #bb86fc;
+    color: #121212;
+}
+"""
 
-gr.Interface(
-    fn=predict_risk,
-    inputs=inputs,
-    outputs="text",
-    title="🧬 Cervical Cancer Risk Predictor",
-    description="Enter your health details to estimate risk level and receive recommendations.",
-    allow_flagging="never"
-).launch()
+# Step 6: Gradio Multi-Page Layout
+with gr.Blocks(css=custom_css) as app:
+    gr.HTML("""
+    <div style="text-align:center;">
+        <h1>🧬 Cervical Cancer Risk Predictor</h1>
+        <p style="font-size: 1.1em; color: #bbb;">
+            trained with medical data to help assess cervical cancer risk and provide useful advice.
+        </p>
+    </div>
+    """)
+
+    # Home Page
+    home = gr.Column(visible=True)
+    with home:
+        gr.HTML("""
+        <div class="tabitem">
+            <h2>Welcome to the Risk Assessment Tool</h2>
+            <p>This app helps identify the probability of cervical cancer using XGBoost ML model.</p>
+            <ul>
+                <li>Fast and easy risk evaluation</li>
+                <li>Personalized medical advice</li>
+                <li>Trained with UCI medical dataset</li>
+            </ul>
+            <br>
+            <p>Click below to get started:</p>
+        </div>
+        """)
+        start_btn = gr.Button("🚀 Start Risk Assessment")
+
+    # Assessment Page
+    assessment = gr.Column(visible=False)
+    with assessment:
+        gr.HTML("<div class='tabitem'><h2>Enter Your Medical Information</h2></div>")
+        input_fields = [gr.Number(label=label) for label in feature_names]
+        predict_btn = gr.Button("Predict Risk")
+
+    # Results Page
+    results = gr.Column(visible=False)
+    with results:
+        gr.HTML("<div class='tabitem'><h2>Risk Prediction Results</h2></div>")
+        result_output = gr.HTML()
+        back_btn = gr.Button("Go Back to Home")
+
+    # Navigation Logic
+    def go_to_assessment():
+        return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
+
+    def go_to_results(output):
+        return gr.update(visible=False), gr.update(visible=False), gr.update(visible=True), output
+
+    def go_to_home():
+        return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), ""
+
+    start_btn.click(go_to_assessment, outputs=[home, assessment, results])
+    predict_btn.click(lambda *args: go_to_results(predict_risk(*args)), 
+                      inputs=input_fields, 
+                      outputs=[home, assessment, results, result_output])
+    back_btn.click(go_to_home, outputs=[home, assessment, results, result_output])
+
+# Step 7: Launch App
+app.launch(share=True)
