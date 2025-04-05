@@ -1,0 +1,75 @@
+import pandas as pd
+import numpy as np
+from sklearn.preprocessing import StandardScaler
+import xgboost as xgb
+import joblib
+import gradio as gr
+
+# Load model and scaler
+model = joblib.load("xgb_model.pkl")
+scaler = joblib.load("scaler.pkl")
+
+# Load feature names
+feature_names = [
+    "Age", "Number of sexual partners", "First sexual intercourse",
+    "Num of pregnancies", "Smokes", "Smokes (years)", "Smokes (packs/year)",
+    "Hormonal Contraceptives", "Hormonal Contraceptives (years)",
+    "IUD", "IUD (years)", "STDs", "STDs (number)", "STDs:condylomatosis",
+    "STDs:cervical condylomatosis", "STDs:vaginal condylomatosis",
+    "STDs:vulvo-perineal condylomatosis", "STDs:syphilis",
+    "STDs:pelvic inflammatory disease", "STDs:genital herpes",
+    "STDs:molluscum contagiosum", "STDs:AIDS", "STDs:HIV",
+    "STDs:Hepatitis B", "STDs:HPV", "STDs: Time since first diagnosis",
+    "STDs: Time since last diagnosis", "Dx:Cancer", "Dx:CIN", "Dx:HPV",
+    "Dx", "Hinselmann", "Schiller", "Citology"
+]
+
+def predict_risk(*inputs):
+    input_array = np.array(inputs).reshape(1, -1)
+    input_scaled = scaler.transform(input_array)
+    prob = model.predict_proba(input_scaled)[0][1]
+    risk_percent = round(prob * 100, 2)
+
+    if prob >= 0.5:
+        risk_level = "⚠️ High Risk"
+        message = (
+            "🚨 *High Risk Detected*\n\n"
+            "📌 Recommended Precautions:\n"
+            "- Schedule a colposcopy or biopsy\n"
+            "- Get a full HPV test and Pap smear\n"
+            "- Follow up every 6 months\n"
+            "- Avoid smoking\n"
+            "- Strengthen immunity with diet, sleep & exercise"
+        )
+    elif prob >= 0.2:
+        risk_level = "⚠️ Moderate Risk"
+        message = (
+            "⚠️ *Moderate Risk Noted*\n\n"
+            "📌 Suggested Actions:\n"
+            "- Book a Pap smear or HPV screening\n"
+            "- Limit smoking and alcohol\n"
+            "- Consult about hormonal contraceptives\n"
+            "- Yearly checkups recommended"
+        )
+    else:
+        risk_level = "✅ Low Risk"
+        message = (
+            "✅ *Low Risk*\n\n"
+            "📌 Keep it up!\n"
+            "- Regular screenings every 3 years\n"
+            "- Practice safe sex\n"
+            "- Maintain a healthy lifestyle"
+        )
+
+    return f"{risk_level}\nEstimated Risk: {risk_percent}%\n\n{message}"
+
+inputs = [gr.Number(label=label) for label in feature_names]
+
+gr.Interface(
+    fn=predict_risk,
+    inputs=inputs,
+    outputs="text",
+    title="🧬 Cervical Cancer Risk Predictor",
+    description="Enter your health details to estimate risk level and receive recommendations.",
+    allow_flagging="never"
+).launch()
