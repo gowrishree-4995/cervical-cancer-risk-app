@@ -6,6 +6,7 @@ import pandas as pd
 import numpy as np
 from sklearn.model_selection import train_test_split
 from sklearn.preprocessing import StandardScaler
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score
 import xgboost as xgb
 import gradio as gr
 
@@ -16,21 +17,60 @@ df.replace('?', np.nan, inplace=True)
 df = df.astype(float)
 df.fillna(df.mean(), inplace=True)
 
-X = df.drop(columns=['Biopsy'])
+X_full = df.drop(columns=['Biopsy'])
 y = df['Biopsy']
 
+# Standardize
+scaler_full = StandardScaler()
+X_scaled_full = scaler_full.fit_transform(X_full)
+
+# Split
+X_train_full, X_test_full, y_train, y_test = train_test_split(
+    X_scaled_full, y, test_size=0.2, random_state=42, stratify=y
+)
+
+# Handle imbalance
+neg, pos = np.bincount(y_train.astype(int))
+scale_pos_weight = neg / pos
+
+# Initial Model (all features)
+model_full = xgb.XGBClassifier(
+    use_label_encoder=False,
+    eval_metric='logloss',
+    scale_pos_weight=scale_pos_weight,
+    max_depth=4,
+    learning_rate=0.1,
+    n_estimators=100,
+    subsample=0.8,
+    colsample_bytree=0.8,
+    random_state=42
+)
+model_full.fit(X_train_full, y_train)
+
+# Step 4: Feature Selection
+importances = model_full.feature_importances_
+feature_importance_df = pd.DataFrame({
+    'feature': X_full.columns,
+    'importance': importances
+}).sort_values(by='importance', ascending=False)
+
+# Select top 10 features
+top_features = feature_importance_df['feature'].iloc[:10].tolist()
+print(f"Top 10 selected features:\n{top_features}")
+
+# Filter dataset
+X = df[top_features]
+
+# Re-standardize for selected features
 scaler = StandardScaler()
 X_scaled = scaler.fit_transform(X)
 
+# Re-split
 X_train, X_test, y_train, y_test = train_test_split(
     X_scaled, y, test_size=0.2, random_state=42, stratify=y
 )
 
-# Handle class imbalance
-neg, pos = np.bincount(y_train.astype(int))
-scale_pos_weight = neg / pos
-
-# Train XGBoost
+# Retrain final model
 model = xgb.XGBClassifier(
     use_label_encoder=False,
     eval_metric='logloss',
@@ -44,9 +84,19 @@ model = xgb.XGBClassifier(
 )
 model.fit(X_train, y_train)
 
-# Step 4: Define Prediction Function
-feature_names = df.drop(columns=["Biopsy"]).columns.tolist()
+# Evaluate
+y_pred = model.predict(X_test)
+accuracy = accuracy_score(y_test, y_pred)
+precision = precision_score(y_test, y_pred)
+recall = recall_score(y_test, y_pred)
+f1 = f1_score(y_test, y_pred)
 
+print(f"Accuracy: {accuracy * 100:.2f}%")
+print(f"Precision: {precision:.2f}")
+print(f"Recall: {recall:.2f}")
+print(f"F1 Score: {f1:.2f}")
+
+# Step 5: Prediction Function
 def predict_risk(*inputs):
     input_array = np.array(inputs).reshape(1, -1)
     input_scaled = scaler.transform(input_array)
@@ -57,39 +107,33 @@ def predict_risk(*inputs):
         risk_level = "⚠️ High Risk"
         message = (
             "<b>🚨 High Risk Detected</b><br><br>"
-            "<ul>"
-            "<li>Schedule a colposcopy or biopsy</li>"
+            "<ul><li>Schedule a colposcopy or biopsy</li>"
             "<li>Get a full HPV test and Pap smear</li>"
             "<li>Follow up every 6 months</li>"
             "<li>Avoid smoking</li>"
-            "<li>Boost immunity with sleep, diet, and exercise</li>"
-            "</ul>"
+            "<li>Boost immunity with sleep, diet, and exercise</li></ul>"
         )
     elif prob >= 0.2:
         risk_level = "⚠️ Moderate Risk"
         message = (
             "<b>⚠️ Moderate Risk Noted</b><br><br>"
-            "<ul>"
-            "<li>Book a Pap smear or HPV screening</li>"
+            "<ul><li>Book a Pap smear or HPV screening</li>"
             "<li>Reduce smoking and alcohol</li>"
             "<li>Consult about hormonal contraceptives</li>"
-            "<li>Annual health checks recommended</li>"
-            "</ul>"
+            "<li>Annual health checks recommended</li></ul>"
         )
     else:
         risk_level = "✅ Low Risk"
         message = (
             "<b>✅ Low Risk</b><br><br>"
-            "<ul>"
-            "<li>Regular screening every 3 years</li>"
+            "<ul><li>Regular screening every 3 years</li>"
             "<li>Safe sexual practices</li>"
-            "<li>Healthy habits & lifestyle</li>"
-            "</ul>"
+            "<li>Healthy habits & lifestyle</li></ul>"
         )
 
     return f"<h3>{risk_level}</h3><p><b>Estimated Risk:</b> {risk_percent}%</p>{message}"
 
-# Step 5: Custom CSS for Dark Theme
+# Step 6: Custom CSS
 custom_css = """
 .gradio-container {
     font-family: 'Segoe UI', sans-serif;
@@ -121,50 +165,60 @@ button:hover {
 }
 """
 
-# Step 6: Gradio Multi-Page Layout
+# Step 7: Gradio App Layout with Feature-Extracted Inputs
 with gr.Blocks(css=custom_css) as app:
     gr.HTML("""
     <div style="text-align:center;">
         <h1>🧬 Cervical Cancer Risk Predictor</h1>
         <p style="font-size: 1.1em; color: #bbb;">
-            trained with medical data to help assess cervical cancer risk and provide useful advice.
+            Trained with medical data to help assess cervical cancer risk and provide useful advice.
         </p>
     </div>
     """)
 
-    # Home Page
     home = gr.Column(visible=True)
     with home:
         gr.HTML("""
         <div class="tabitem">
             <h2>Welcome to the Risk Assessment Tool</h2>
-            <p>This app helps identify the probability of cervical cancer using XGBoost ML model.</p>
+            <p>This app helps identify the probability of cervical cancer using an XGBoost model trained on selected features.</p>
             <ul>
                 <li>Fast and easy risk evaluation</li>
                 <li>Personalized medical advice</li>
                 <li>Trained with UCI medical dataset</li>
             </ul>
-            <br>
-            <p>Click below to get started:</p>
+            <br><p>Click below to get started:</p>
         </div>
         """)
         start_btn = gr.Button("🚀 Start Risk Assessment")
 
-    # Assessment Page
     assessment = gr.Column(visible=False)
     with assessment:
         gr.HTML("<div class='tabitem'><h2>Enter Your Medical Information</h2></div>")
-        input_fields = [gr.Number(label=label) for label in feature_names]
+
+        # Feature-extracted input fields (adjust based on your top_features)
+        input_fields = [
+            gr.Slider(13, 80, step=1, label="Age"),
+            gr.Slider(0, 30, step=1, label="Number of sexual partners"),
+            gr.Slider(10, 30, step=1, label="First sexual intercourse (Age)"),
+            gr.Slider(0, 15, step=1, label="Num of pregnancies"),
+            gr.Radio([0, 1], label="Do you smoke? (0 = No, 1 = Yes)"),
+            gr.Slider(0, 50, step=1, label="Smokes (years)"),
+            gr.Slider(0.0, 30.0, step=0.5, label="Smokes (packs/year)"),
+            gr.Radio([0, 1], label="Use hormonal contraceptives? (0 = No, 1 = Yes)"),
+            gr.Slider(0, 30, step=1, label="Hormonal Contraceptives (years)"),
+            gr.Slider(0, 10, step=1, label="STDs: Number of diagnosis")
+        ]
+
         predict_btn = gr.Button("Predict Risk")
 
-    # Results Page
     results = gr.Column(visible=False)
     with results:
         gr.HTML("<div class='tabitem'><h2>Risk Prediction Results</h2></div>")
         result_output = gr.HTML()
         back_btn = gr.Button("Go Back to Home")
 
-    # Navigation Logic
+    # Page Navigation Logic
     def go_to_assessment():
         return gr.update(visible=False), gr.update(visible=True), gr.update(visible=False)
 
@@ -175,10 +229,12 @@ with gr.Blocks(css=custom_css) as app:
         return gr.update(visible=True), gr.update(visible=False), gr.update(visible=False), ""
 
     start_btn.click(go_to_assessment, outputs=[home, assessment, results])
-    predict_btn.click(lambda *args: go_to_results(predict_risk(*args)), 
-                      inputs=input_fields, 
+    predict_btn.click(lambda *args: go_to_results(predict_risk(*args)),
+                      inputs=input_fields,
                       outputs=[home, assessment, results, result_output])
     back_btn.click(go_to_home, outputs=[home, assessment, results, result_output])
 
-# Step 7: Launch App
+# Step 8: Launch App
 app.launch(share=True)
+
+
